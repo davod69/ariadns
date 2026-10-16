@@ -1,7 +1,9 @@
 name: Release
 on:
   push:
+    branches: [main]
     tags: ["v*"]
+  workflow_dispatch:
 permissions:
   contents: write
 jobs:
@@ -12,16 +14,23 @@ jobs:
       - uses: actions/setup-go@v5
         with: { go-version: "1.24" }
       - run: go test ./...
+      - name: Version
+        run: |
+          if [ "${GITHUB_REF_TYPE}" = tag ]; then echo "VER=${GITHUB_REF_NAME}" >> $GITHUB_ENV
+          else echo "VER=v0.1.${GITHUB_RUN_NUMBER}" >> $GITHUB_ENV; fi
       - name: Build
         run: |
           mkdir dist
           for arch in amd64 arm64; do
             CGO_ENABLED=0 GOOS=linux GOARCH=$arch go build -trimpath \
-              -ldflags "-s -w -X ariadns/internal/version.Version=${GITHUB_REF_NAME}" \
+              -ldflags "-s -w -X ariadns/internal/version.Version=${VER}" \
               -o dist/ariadns_linux_$arch ./cmd/ariadns
           done
           (cd dist && sha256sum ariadns_linux_* > checksums.txt)
       - uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ env.VER }}
+          target_commitish: ${{ github.sha }}
+          make_latest: true
           files: dist/*
           generate_release_notes: true
