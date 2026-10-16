@@ -2,7 +2,7 @@
 # ariadns installer — one command install/upgrade on Linux (systemd).
 #   curl -fsSL https://raw.githubusercontent.com/davod69/ariadns/main/scripts/install.sh | sudo bash
 # Options (environment variables):
-#   ARIADNS_ALLOW="192.168.0.0/16,10.0.0.0/8"  networks allowed to query; also makes it listen on 0.0.0.0
+#   ARIADNS_ALLOW="203.0.113.0/24,..."          networks allowed to query (default: private LAN ranges)
 #   ARIADNS_VERSION=v1.0.0                      install a specific release (default: latest)
 #   ARIADNS_BINARY=/path/to/ariadns             install a local binary instead of downloading
 #   ARIADNS_UNINSTALL=1                         remove ariadns (config in /etc/ariadns is kept)
@@ -62,24 +62,20 @@ mkdir -p "$CONF_DIR"
 install -m 0755 "$TMP/ariadns" "$BIN"
 
 if [ ! -f "$CONF_DIR/config.json" ]; then
-  if [ -n "${ARIADNS_ALLOW:-}" ]; then
-    ALLOW=$(printf '%s' "$ARIADNS_ALLOW" | sed 's/ //g; s/,/","/g')
-    LISTEN="0.0.0.0:53"; ACCESS="\"allow\": [\"$ALLOW\"], "
-  else
-    LISTEN="127.0.0.1:53"; ACCESS=""
-  fi
+  ALLOW_LIST="${ARIADNS_ALLOW:-127.0.0.0/8,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16}"
+  ALLOW=$(printf '%s' "$ALLOW_LIST" | sed 's/ //g; s/,/","/g')
   cat > "$CONF_DIR/config.json" <<CFG
 {
-  "listen": { "udp": "$LISTEN", "tcp": "$LISTEN" },
+  "listen": { "udp": "0.0.0.0:53", "tcp": "0.0.0.0:53" },
   "upstreams": [
     "tls://1.1.1.1:853#cloudflare-dns.com",
     "tls://9.9.9.9:853#dns.quad9.net"
   ],
-  "access": { ${ACCESS}"rate_limit_qps": 100, "rate_burst": 200 },
-  "web": { "listen": "127.0.0.1:8080" }
+  "access": { "allow": ["$ALLOW"], "rate_limit_qps": 100, "rate_burst": 200 },
+  "web": { "listen": "127.0.0.1:5380" }
 }
 CFG
-  say "created $CONF_DIR/config.json"
+  say "created $CONF_DIR/config.json (allowed clients: $ALLOW_LIST)"
 else
   say "keeping existing $CONF_DIR/config.json"
 fi
@@ -87,8 +83,19 @@ chown -R root:ariadns "$CONF_DIR"; chmod 750 "$CONF_DIR"; chmod 640 "$CONF_DIR/c
 "$BIN" -config "$CONF_DIR/config.json" -check
 
 if [ "$HAS_SYSTEMD" = 1 ]; then
-  if ss -lntu 2>/dev/null | grep -qE '[:.]53\s' && ! systemctl is-active --quiet ariadns; then
-    say "WARNING: port 53 is already in use (often systemd-resolved). Free it or change listen.* in $CONF_DIR/config.json"
+  systemctl stop ariadns 2>/dev/null || true
+  port53_busy() { ss -H -lntu 2>/dev/null | grep -qE '[:.]53[[:space:]]'; }
+  if port53_busy && systemctl is-active --quiet systemd-resolved; then
+    say "port 53 is used by systemd-resolved: turning off its DNS stub listener"
+    mkdir -p /etc/systemd/resolved.conf.d
+    printf '[Resolve]\nDNSStubListener=no\n' > /etc/systemd/resolved.conf.d/ariadns.conf
+    [ -e /run/systemd/resolve/resolv.conf ] && ln -sf /run/systemd/resolve/resolv.conf /etc/resolv.conf
+    systemctl restart systemd-resolved
+    sleep 1
+  fi
+  if port53_busy; then
+    echo "--- who is using port 53:"; ss -lntup 2>/dev/null | grep -E '[:.]53[[:space:]]' || true
+    die "port 53 is still busy. Stop that program, or change \"listen\" in $CONF_DIR/config.json to another port and re-run."
   fi
   cat > "$UNIT" <<'SVC'
 [Unit]
@@ -114,7 +121,11 @@ SVC
   systemctl enable ariadns >/dev/null 2>&1
   systemctl restart ariadns
   sleep 1
-  systemctl is-active --quiet ariadns && say "ariadns is running" || die "service failed: journalctl -u ariadns -n 30"
+  if ! systemctl is-active --quiet ariadns; then
+    echo "--- service log:"; journalctl -u ariadns -n 15 --no-pager 2>/dev/null || true
+    die "ariadns failed to start (see log above)"
+  fi
+  say "ariadns is running"
 else
   say "systemd not found: run manually with  $BIN -config $CONF_DIR/config.json"
 fi

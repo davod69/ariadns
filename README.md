@@ -17,8 +17,6 @@ A fast, single-binary DNS server written in Go (standard library only, no third-
 ## Install (Linux, systemd)
 ```bash
 curl -fsSL https://raw.githubusercontent.com/davod69/ariadns/main/scripts/install.sh | sudo bash
-# serve your LAN (otherwise it listens on 127.0.0.1 only):
-curl -fsSL https://raw.githubusercontent.com/davod69/ariadns/main/scripts/install.sh | sudo ARIADNS_ALLOW="192.168.0.0/16" bash
 ```
 Upgrade = run the same command again (config is kept). Uninstall: `ARIADNS_UNINSTALL=1`.
 

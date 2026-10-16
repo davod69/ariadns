@@ -17,8 +17,6 @@
 ## نصب (لینوکس با systemd)
 ```bash
 curl -fsSL https://raw.githubusercontent.com/davod69/ariadns/main/scripts/install.sh | sudo bash
-# برای سرویس‌دهی به شبکه‌ی داخلی (در غیر این صورت فقط روی 127.0.0.1 گوش می‌دهد):
-curl -fsSL https://raw.githubusercontent.com/davod69/ariadns/main/scripts/install.sh | sudo ARIADNS_ALLOW="192.168.0.0/16" bash
 ```
 برای آپدیت همین دستور را دوباره بزنید (تنظیمات حفظ می‌شود). حذف: `ARIADNS_UNINSTALL=1`.
 
