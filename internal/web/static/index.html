@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex, nofollow">
+  <title>AriaDNS</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <h1>Aria<span>DNS</span></h1>
+    <div class="meta">
+      <span id="version">-</span>
+      <span id="uptime">-</span>
+      <span id="status" class="pill">connecting</span>
+    </div>
+    <div class="actions">
+      <button id="btn-flush" type="button">Flush cache</button>
+      <button id="btn-reload" type="button">Reload rules</button>
+    </div>
+  </header>
+
+  <main>
+    <section class="cards">
+      <div class="card"><div class="label">Queries</div><div class="value" id="c-total">0</div></div>
+      <div class="card"><div class="label">Blocked</div><div class="value" id="c-blocked">0%</div></div>
+      <div class="card"><div class="label">Cache hit</div><div class="value" id="c-cache">0%</div></div>
+      <div class="card"><div class="label">Latency avg / p95</div><div class="value" id="c-lat">-</div></div>
+      <div class="card"><div class="label">QPS (now)</div><div class="value" id="c-qps">0</div></div>
+    </section>
+
+    <section class="panel wide">
+      <h2>Queries per second <small>last 2 minutes</small></h2>
+      <canvas id="spark" width="1000" height="140" aria-label="Queries per second"></canvas>
+    </section>
+
+    <section class="panel">
+      <h2>Outcomes</h2>
+      <div id="outcomes" class="bars"></div>
+    </section>
+
+    <section class="panel">
+      <h2>Transports</h2>
+      <div id="transports" class="bars"></div>
+    </section>
+
+    <section class="panel">
+      <h2>Top domains</h2>
+      <table><tbody id="t-domains"></tbody></table>
+    </section>
+
+    <section class="panel">
+      <h2>Top blocked</h2>
+      <table><tbody id="t-blocked"></tbody></table>
+    </section>
+
+    <section class="panel">
+      <h2>Top clients</h2>
+      <table><tbody id="t-clients"></tbody></table>
+    </section>
+
+    <section class="panel">
+      <h2>Upstreams</h2>
+      <table>
+        <thead><tr><th>Upstream</th><th>State</th><th>RTT</th><th>Queries</th><th>Fail</th></tr></thead>
+        <tbody id="t-upstreams"></tbody>
+      </table>
+    </section>
+
+    <section class="panel wide">
+      <h2>Recent queries</h2>
+      <table class="log">
+        <thead><tr><th>Time</th><th>Client</th><th>Name</th><th>Type</th><th>Via</th><th>Result</th><th>Outcome</th><th>ms</th></tr></thead>
+        <tbody id="t-recent"></tbody>
+      </table>
+    </section>
+  </main>
+
+  <footer id="footer"></footer>
+  <script src="app.js"></script>
+</body>
+</html>

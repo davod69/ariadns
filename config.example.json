@@ -1,0 +1,19 @@
+{
+  "listen": { "udp": "0.0.0.0:53", "tcp": "0.0.0.0:53", "dot": "0.0.0.0:853", "doh": "0.0.0.0:443" },
+  "tls": { "cert_file": "/etc/ariadns/fullchain.pem", "key_file": "/etc/ariadns/privkey.pem" },
+  "upstreams": [
+    "tls://1.1.1.1:853#cloudflare-dns.com",
+    "tls://9.9.9.9:853#dns.quad9.net"
+  ],
+  "strategy": "fastest",
+  "cache": { "enabled": true, "max_entries": 100000, "serve_stale_secs": 30, "max_ttl": 86400, "negative_ttl": 300 },
+  "access": { "allow": ["192.168.0.0/16", "10.0.0.0/8"], "rate_limit_qps": 100, "rate_burst": 200 },
+  "rules": {
+    "block": ["ads.example.com"],
+    "hosts": { "nas.home": ["192.168.1.10"] },
+    "forward": { "corp.example.com": ["10.0.0.2:53"] },
+    "block_mode": "nxdomain"
+  },
+  "web": { "listen": "127.0.0.1:8080" },
+  "log": { "level": "info", "format": "text" }
+}

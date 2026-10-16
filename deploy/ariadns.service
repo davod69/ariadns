@@ -1,0 +1,18 @@
+[Unit]
+Description=ariadns DNS server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/local/bin/ariadns -config /etc/ariadns/config.json
+ExecReload=/bin/kill -HUP $MAINPID
+User=ariadns
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
