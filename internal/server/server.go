@@ -16,11 +16,14 @@ import (
 	"sync/atomic"
 	"time"
 
+	"ariadns/internal/admin"
 	"ariadns/internal/config"
 	"ariadns/internal/dnsmsg"
+	"ariadns/internal/smart"
+	"ariadns/internal/sni"
 	"ariadns/internal/stats"
+	"ariadns/internal/subs"
 	"ariadns/internal/upstream"
-	"ariadns/internal/web"
 )
 
 // Server owns the listeners and the handler.
@@ -31,6 +34,10 @@ type Server struct {
 	h       *Handler
 	certs   *certStore
 	st      *stats.Collector
+	subs    *subs.Store
+	smart   *smart.Engine
+	creds   *admin.Creds
+	relay   *sni.Relay
 
 	addrs   map[string]string
 	cancel  context.CancelFunc
@@ -49,13 +56,18 @@ func New(cfg *config.Config, cfgPath string, log *slog.Logger, opts ...upstream.
 	if err != nil {
 		return nil, err
 	}
-	return &Server{
+	s := &Server{
 		cfgPath: cfgPath, cfg: cfg, log: log, h: h, st: col,
 		certs:   &certStore{},
 		addrs:   map[string]string{},
 		connSem: make(chan struct{}, cfg.Limits.MaxTCPConns),
 		pktPool: sync.Pool{New: func() any { b := make([]byte, 4096); return &b }},
-	}, nil
+	}
+	if err := s.openData(); err != nil {
+		h.close()
+		return nil, err
+	}
+	return s, nil
 }
 
 // Handler exposes the query handler (used by tests).
@@ -65,7 +77,8 @@ func (s *Server) Handler() *Handler { return s.h }
 func (s *Server) Addr(name string) string { return s.addrs[name] }
 
 func (s *Server) needTLS() bool {
-	return s.cfg.Listen.DoT != "" || (s.cfg.Listen.DoH != "" && !s.cfg.DoH.InsecureHTTP)
+	return s.cfg.Listen.DoT != "" || (s.cfg.Listen.DoH != "" && !s.cfg.DoH.InsecureHTTP) ||
+		(s.cfg.Panel.TLS && s.cfg.Panel.Listen != "")
 }
 
 // Start binds every configured listener and begins serving in the
@@ -134,6 +147,16 @@ func (s *Server) Start(ctx context.Context) error {
 			return fail(err)
 		}
 	}
+	if s.cfg.Smart.Enabled {
+		if err := s.startSmart(); err != nil {
+			return fail(err)
+		}
+	}
+	if a := s.cfg.Panel.Listen; a != "" {
+		if err := s.startPanel(a); err != nil {
+			return fail(err)
+		}
+	}
 	if a := s.cfg.Web.Listen; a != "" {
 		if err := s.startWeb(a); err != nil {
 			return fail(err)
@@ -186,6 +209,12 @@ func (s *Server) Shutdown() {
 	case <-done:
 	case <-time.After(5 * time.Second):
 		s.log.Warn("shutdown timed out waiting for connections")
+	}
+	if s.relay != nil {
+		s.relay.Close()
+	}
+	if s.subs != nil {
+		s.subs.Close()
 	}
 	s.h.close()
 }
@@ -319,8 +348,13 @@ func (s *Server) startWeb(addr string) error {
 		return err
 	}
 	s.addrs["web"] = ln.Addr().String()
+	token, err := s.ctlToken()
+	if err != nil {
+		_ = ln.Close()
+		return err
+	}
 	srv := &http.Server{
-		Handler:           web.New(s, s.cfg.Web.Token),
+		Handler:           s.webHandler(token),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
 		WriteTimeout:      15 * time.Second,

@@ -7,11 +7,13 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
+	"net"
 	"os"
 	"os/signal"
 	"strings"
 	"syscall"
 
+	"ariadns/internal/admin"
 	"ariadns/internal/config"
 	"ariadns/internal/server"
 	"ariadns/internal/version"
@@ -24,8 +26,12 @@ func run() int {
 		cfgPath = flag.String("config", "", "path to config.json (defaults are used when empty)")
 		check   = flag.Bool("check", false, "validate the configuration and exit")
 		showVer = flag.Bool("version", false, "print version and exit")
+		initCr  = flag.Bool("init", false, "create admin credentials if missing, print the panel address and exit")
 	)
 	flag.Parse()
+	if flag.Arg(0) == "menu" {
+		return runMenu(*cfgPath)
+	}
 
 	if *showVer {
 		fmt.Printf("ariadns %s (commit %s, built %s)\n", version.Version, version.Commit, version.Date)
@@ -35,6 +41,9 @@ func run() int {
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "config error:", err)
 		return 2
+	}
+	if *initCr {
+		return runInit(cfg)
 	}
 	if *check {
 		fmt.Println("configuration OK")
@@ -74,5 +83,34 @@ func run() int {
 		return 1
 	}
 	log.Info("bye")
+	return 0
+}
+
+// runInit prepares the admin credentials and tells the operator how to log in.
+func runInit(cfg *config.Config) int {
+	if cfg.DataDir == "" || cfg.Panel.Listen == "" {
+		fmt.Fprintln(os.Stderr, "-init needs data_dir and panel.listen in the config")
+		return 2
+	}
+	cr, pw, err := admin.OpenCreds(cfg.DataDir)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "init failed:", err)
+		return 1
+	}
+	host := cfg.Smart.PublicIP
+	if host == "" {
+		host = "SERVER_IP"
+	}
+	_, port, _ := net.SplitHostPort(cfg.Panel.Listen)
+	scheme := "http"
+	if cfg.Panel.TLS {
+		scheme = "https"
+	}
+	fmt.Printf("Admin panel : %s://%s:%s/%s/\n", scheme, host, port, cr.Path())
+	if pw != "" {
+		fmt.Printf("Password    : %s\n(shown once - save it now; reset later with: ariadns menu)\n", pw)
+	} else {
+		fmt.Println("Password    : unchanged (reset with: ariadns menu, option 8)")
+	}
 	return 0
 }

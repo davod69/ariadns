@@ -18,13 +18,14 @@ const (
 	OutStale       = "stale"
 	OutBlocked     = "blocked"
 	OutLocal       = "local"
+	OutSmart       = "smart"
 	OutRefused     = "refused"
 	OutRateLimited = "ratelimited"
 	OutError       = "error"
 )
 
 // Outcomes lists every outcome in display order.
-var Outcomes = []string{OutUpstream, OutCache, OutStale, OutBlocked, OutLocal, OutRefused, OutRateLimited, OutError}
+var Outcomes = []string{OutUpstream, OutCache, OutStale, OutBlocked, OutLocal, OutSmart, OutRefused, OutRateLimited, OutError}
 
 // Transports lists every transport in display order.
 var Transports = []string{"udp", "tcp", "dot", "doh"}

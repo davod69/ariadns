@@ -180,7 +180,7 @@
 
   async function tick() {
     try {
-      const [stats, recent] = await Promise.all([api('/api/stats'), api('/api/queries?limit=40')]);
+      const [stats, recent] = await Promise.all([api('api/stats'), api('api/queries?limit=40')]);
       render(stats);
       renderRecent(recent);
     } catch (err) {
@@ -200,8 +200,8 @@
     tick();
   }
 
-  $('btn-flush').addEventListener('click', () => action('/api/cache/flush', 'cache flushed'));
-  $('btn-reload').addEventListener('click', () => action('/api/reload', 'rules reloaded'));
+  $('btn-flush').addEventListener('click', () => action('api/cache/flush', 'cache flushed'));
+  $('btn-reload').addEventListener('click', () => action('api/reload', 'rules reloaded'));
 
   tick();
   setInterval(tick, 2000);

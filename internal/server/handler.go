@@ -13,7 +13,9 @@ import (
 	"ariadns/internal/config"
 	"ariadns/internal/dnsmsg"
 	"ariadns/internal/rules"
+	"ariadns/internal/smart"
 	"ariadns/internal/stats"
+	"ariadns/internal/subs"
 	"ariadns/internal/upstream"
 )
 
@@ -42,6 +44,19 @@ type Handler struct {
 	flights flightGroup
 	refresh sync.Map
 	timeout time.Duration
+	smart   *smart.Engine // nil when smart routing is off
+	subs    *subs.Store   // nil when subscribers are off
+
+	allowPrivateTargets bool // tests only: let the relay resolve to private addresses
+}
+
+// allowed reports whether client may use the server: static allow-list,
+// loopback, or an active subscriber.
+func (h *Handler) allowed(live *liveState, client netip.Addr) bool {
+	if live.acl.Allowed(client) {
+		return true
+	}
+	return h.subs != nil && h.subs.Allowed(client)
 }
 
 func newLiveState(cfg *config.Config) (*liveState, error) {
@@ -174,7 +189,7 @@ func (h *Handler) Handle(ctx context.Context, req []byte, client netip.Addr, tra
 	}
 
 	live := h.live.Load()
-	if !live.acl.Allowed(client) {
+	if !h.allowed(live, client) {
 		return finish(stats.OutRefused, dnsmsg.NewReply(req, dnsmsg.RcodeRefused))
 	}
 	if !h.limiter.Allow(client) {
@@ -194,6 +209,21 @@ func (h *Handler) Handle(ctx context.Context, req []byte, client netip.Addr, tra
 		return finish(stats.OutBlocked, h.blockReply(live.eng, req, q))
 	case rules.Local:
 		return finish(stats.OutLocal, dnsmsg.AddrReply(req, q, d.IPs, live.eng.LocalTTL, true))
+	}
+
+	if h.smart != nil && d.Kind == rules.Pass {
+		if cat, ok := h.smart.Match(q.Name); ok {
+			if ip, have := h.smart.PublicV4(); have {
+				ev.Rule = "smart:" + cat
+				switch q.Type {
+				case dnsmsg.TypeA:
+					return finish(stats.OutSmart, dnsmsg.AddrReply(req, q, []netip.Addr{ip}, 60, false))
+				case dnsmsg.TypeAAAA, dnsmsg.TypeHTTPS, dnsmsg.TypeSVCB:
+					// No IPv6 / ECH hints: they would let clients bypass the relay.
+					return finish(stats.OutSmart, dnsmsg.NewReply(req, dnsmsg.RcodeSuccess))
+				}
+			}
+		}
 	}
 
 	edns := dnsmsg.EDNS(req)
@@ -313,4 +343,62 @@ func (f *flightGroup) Do(key string, fn func() ([]byte, string, error)) ([]byte,
 	f.mu.Unlock()
 	c.wg.Done()
 	return c.resp, c.via, c.err
+}
+
+// ResolveAddrs returns the real public addresses of name (IPv4 first). It
+// bypasses smart routing, so the relay never resolves a name to itself, and
+// it drops private, loopback and link-local results so the relay cannot be
+// used to reach internal networks.
+func (h *Handler) ResolveAddrs(ctx context.Context, name string) ([]netip.Addr, error) {
+	var out []netip.Addr
+	var lastErr error
+	self := netip.Addr{}
+	if h.smart != nil {
+		self, _ = h.smart.PublicV4()
+	}
+	for _, qt := range []uint16{dnsmsg.TypeA, dnsmsg.TypeAAAA} {
+		q := dnsmsg.Question{Name: name, Type: qt, Class: dnsmsg.ClassIN}
+		key := cache.Key("relay", name, qt, dnsmsg.ClassIN, false)
+		var resp []byte
+		if h.cache != nil {
+			if c, st := h.cache.Get(key); st == cache.Hit {
+				resp = c
+			}
+		}
+		if resp == nil {
+			r, _, err := h.fetch(h.main, key, q, false)
+			if err != nil {
+				lastErr = err
+				continue
+			}
+			resp = r
+			if h.cache != nil {
+				h.cache.Put(key, resp)
+			}
+		}
+		rrs, err := dnsmsg.WalkRRs(resp)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		for _, rr := range rrs {
+			if rr.Section != dnsmsg.SectionAnswer || rr.Type != qt || rr.Class != dnsmsg.ClassIN {
+				continue
+			}
+			ip, ok := netip.AddrFromSlice(resp[rr.RDStart:rr.RDEnd])
+			if !ok || (!h.allowPrivateTargets && !publicAddr(ip.Unmap())) || ip.Unmap() == self {
+				continue
+			}
+			out = append(out, ip.Unmap())
+		}
+	}
+	if len(out) == 0 && lastErr != nil {
+		return nil, lastErr
+	}
+	return out, ctx.Err()
+}
+
+func publicAddr(ip netip.Addr) bool {
+	return ip.IsValid() && !ip.IsPrivate() && !ip.IsLoopback() && !ip.IsLinkLocalUnicast() &&
+		!ip.IsLinkLocalMulticast() && !ip.IsMulticast() && !ip.IsUnspecified()
 }

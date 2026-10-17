@@ -63,6 +63,23 @@ type WebConfig struct {
 	Token  string `json:"token"`  // required when not bound to loopback
 }
 
+// SmartConfig controls smart routing: listed domains resolve to this
+// server's public IP and the SNI relay forwards the connection.
+type SmartConfig struct {
+	Enabled    bool   `json:"enabled"`
+	PublicIP   string `json:"public_ip"`   // default for the saved setting
+	ListenTLS  string `json:"listen_tls"`  // relay for HTTPS, usually :443
+	ListenHTTP string `json:"listen_http"` // relay for HTTP, usually :80
+	Fragment   bool   `json:"fragment"`    // split the TLS ClientHello into two segments
+	MaxRelays  int    `json:"max_relays"`
+}
+
+// PanelConfig is the public admin panel and subscriber portal.
+type PanelConfig struct {
+	Listen string `json:"listen"` // "" disables
+	TLS    bool   `json:"tls"`    // serve HTTPS using the tls section
+}
+
 type PrivacyConfig struct {
 	AnonymizeClientIPs bool `json:"anonymize_client_ips"`
 	DisableQueryLog    bool `json:"disable_query_log"`
@@ -87,6 +104,9 @@ type Config struct {
 	Access    AccessConfig  `json:"access"`
 	Limits    LimitsConfig  `json:"limits"`
 	Web       WebConfig     `json:"web"`
+	DataDir   string        `json:"data_dir"` // subscribers, routing state, admin credentials
+	Smart     SmartConfig   `json:"smart"`
+	Panel     PanelConfig   `json:"panel"`
 	Privacy   PrivacyConfig `json:"privacy"`
 	Log       LogConfig     `json:"log"`
 }
@@ -108,6 +128,7 @@ func Default() *Config {
 		Access:    AccessConfig{RateLimitQPS: 100, RateBurst: 200},
 		Limits:    LimitsConfig{MaxInflight: 4096, MaxTCPConns: 512, UDPMaxSize: 1232, TCPIdleSecs: 10, DoTIdleSecs: 60},
 		Web:       WebConfig{Listen: "127.0.0.1:8080"},
+		Smart:     SmartConfig{Fragment: true, MaxRelays: 4096},
 		Log:       LogConfig{Level: "info", Format: "text"},
 	}
 }
@@ -161,6 +182,7 @@ func (c *Config) Validate() error {
 	listeners := map[string]string{
 		"listen.udp": c.Listen.UDP, "listen.tcp": c.Listen.TCP,
 		"listen.dot": c.Listen.DoT, "listen.doh": c.Listen.DoH, "web.listen": c.Web.Listen,
+		"panel.listen": c.Panel.Listen, "smart.listen_tls": c.Smart.ListenTLS, "smart.listen_http": c.Smart.ListenHTTP,
 	}
 	for name, a := range listeners {
 		if a == "" {
@@ -225,9 +247,23 @@ func (c *Config) Validate() error {
 			exposed = true
 		}
 	}
-	if exposed && len(c.Access.Allow) == 0 && !c.Access.AllowAll {
+	if (c.Smart.Enabled || c.Panel.Listen != "") && c.DataDir == "" {
+		return fmt.Errorf("smart routing and the panel need data_dir (e.g. \"/var/lib/ariadns\")")
+	}
+	if c.Smart.Enabled && c.Smart.ListenTLS == "" && c.Smart.ListenHTTP == "" {
+		return fmt.Errorf("smart.enabled needs smart.listen_tls and/or smart.listen_http")
+	}
+	if c.Smart.Enabled && c.Smart.MaxRelays < 1 {
+		return fmt.Errorf("smart.max_relays must be positive")
+	}
+	if c.Panel.TLS && c.Panel.Listen != "" && c.TLS.CertFile == "" && !c.TLS.SelfSigned {
+		return fmt.Errorf("panel.tls needs tls.cert_file/tls.key_file (or tls.self_signed)")
+	}
+	// With data_dir set, only subscribers (and access.allow) may query, so the
+	// server is never an open resolver even when access.allow is empty.
+	if exposed && len(c.Access.Allow) == 0 && !c.Access.AllowAll && c.DataDir == "" {
 		return fmt.Errorf("a DNS listener is reachable from the network but access.allow is empty: " +
-			"list the client networks in access.allow (e.g. [\"192.168.0.0/16\"]) or set access.allow_all=true to run an open resolver on purpose")
+			"list the client networks in access.allow (e.g. [\"192.168.0.0/16\"]), set data_dir to use subscribers, or set access.allow_all=true to run an open resolver on purpose")
 	}
 	if c.Web.Listen != "" && !IsLoopbackAddr(c.Web.Listen) && c.Web.Token == "" {
 		return fmt.Errorf("web.listen is reachable from the network: set web.token (or ARIADNS_WEB_TOKEN)")
@@ -235,7 +271,7 @@ func (c *Config) Validate() error {
 	if c.Web.Token != "" && len(c.Web.Token) < 16 {
 		return fmt.Errorf("web.token must be at least 16 characters")
 	}
-	needTLS := c.Listen.DoT != "" || (c.Listen.DoH != "" && !c.DoH.InsecureHTTP)
+	needTLS := c.Listen.DoT != "" || (c.Listen.DoH != "" && !c.DoH.InsecureHTTP) || (c.Panel.TLS && c.Panel.Listen != "")
 	if needTLS {
 		hasFiles := c.TLS.CertFile != "" && c.TLS.KeyFile != ""
 		if !hasFiles && !c.TLS.SelfSigned {
